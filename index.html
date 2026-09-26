@@ -238,6 +238,7 @@
     menuOpen: false,
     role: null,
     discordUser: null,
+    discordAccessToken: null,
     applications: [],
     units: [],
     codices: [],
@@ -632,6 +633,7 @@
         <div class="dossier-actions">
           <button class="btn-secondary saveNotesBtn" data-id="${a.id}">Enregistrer les notes</button>
           <button class="btn-primary notifyBtn" data-id="${a.id}">Notifier Discord</button>
+          <button class="btn-secondary dmBtn" data-id="${a.id}">Notifier MP</button>
           <button class="btn-secondary deleteAppBtn" data-id="${a.id}" style="margin-left:auto;color:#f5b5b5;">Supprimer</button>
           <span class="notify-status" data-id="${a.id}" aria-live="polite"></span>
         </div>
@@ -872,7 +874,7 @@
     if (loginBtn) loginBtn.addEventListener("click", handleDiscordLogin);
 
     const logoutBtn = document.getElementById("logoutBtn");
-    if (logoutBtn) logoutBtn.addEventListener("click", () => { state.discordUser = null; state.role = null; state.view = "landing"; render(); });
+    if (logoutBtn) logoutBtn.addEventListener("click", () => { state.discordUser = null; state.discordAccessToken = null; state.role = null; state.view = "landing"; render(); });
 
     const backBtn = document.getElementById("backBtn");
     if (backBtn) backBtn.addEventListener("click", () => { state.view = "candidat"; state.applyUnitId = null; render(); });
@@ -904,6 +906,9 @@
     });
     document.querySelectorAll(".notifyBtn").forEach(btn => {
       btn.addEventListener("click", e => handleNotify(e.target.dataset.id));
+    });
+    document.querySelectorAll(".dmBtn").forEach(btn => {
+      btn.addEventListener("click", e => handleDM(e.target.dataset.id));
     });
 
     const newUnitBtn = document.getElementById("newUnitBtn");
@@ -1117,6 +1122,42 @@
     render();
   }
 
+  async function handleDM(id) {
+    const target = state.applications.find(a => a.id === id);
+    if (!target) return;
+    const statusEl = document.querySelector(`.notify-status[data-id="${id}"]`);
+    const unit = state.units.find(u => u.id === target.unitId);
+    const textarea = document.querySelector(`.notifyMsgInput[data-id="${id}"]`);
+    const content = textarea ? textarea.value.trim() : defaultNotifyMessage(target, unit);
+    if (!content) {
+      if (statusEl) statusEl.textContent = "Le message ne peut pas être vide";
+      return;
+    }
+    if (!state.discordAccessToken) {
+      if (statusEl) statusEl.textContent = "✗ Session Discord expirée — reconnecte-toi";
+      return;
+    }
+    if (statusEl) statusEl.textContent = "Envoi du MP…";
+    try {
+      const res = await fetch("https://fim-28.onrender.com/api/dm-oauth", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + state.discordAccessToken
+        },
+        body: JSON.stringify({ discordId: target.discordId, message: content })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        if (statusEl) statusEl.textContent = "✓ MP privé envoyé";
+      } else {
+        if (statusEl) statusEl.textContent = "✗ MP échoué : " + (data.error || res.status);
+      }
+    } catch (err) {
+      if (statusEl) statusEl.textContent = "✗ Échec réseau du MP";
+    }
+  }
+
   async function handleNotify(id) {
     const target = state.applications.find(a => a.id === id);
     if (!target) return;
@@ -1281,6 +1322,7 @@
     if (token) {
       try {
         const user = await fetchDiscordUser(token);
+        state.discordAccessToken = token;
         state.discordUser = { id: user.id, username: user.username, display: user.global_name || user.username };
       } catch (e) {
         state.authError = "La connexion Discord a échoué. Réessaie.";
