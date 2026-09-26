@@ -1,0 +1,16 @@
+{
+  "name": "fim-site28-bot",
+  "version": "1.0.0",
+  "description": "Bot Discord FIM Site 28 — anti-raid, anti-spam, modération, logs, rôles automatiques",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "express": "^4.19.2"
+  }
+}
