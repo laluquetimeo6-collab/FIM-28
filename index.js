@@ -1,4 +1,4 @@
-// Bot Discord — FIM Site 28
+// Bot Discord — FIM SITE 28
 // Fonctions : anti-raid, anti-spam, modération (kick/ban/mute), logs,
 // MP de bienvenue, et une petite API HTTP privée utilisée par le site
 // (via une fonction Netlify) pour attribuer un rôle et envoyer un MP
@@ -252,8 +252,65 @@ app.post("/api/dm", checkSecret, async (req, res) => {
     res.status(500).json({ error: "Impossible d'envoyer le MP (DMs peut-être fermés)." });
   }
 });
+// MP depuis le site avec le compte Discord connecté
+app.post("/api/dm-oauth", async (req, res) => {
+  const auth = req.header("authorization") || "";
+  const oauthToken = auth.startsWith("Bearer ")
+    ? auth.slice(7).trim()
+    : "";
 
-app.get("/", (req, res) => res.send("Bot FIM Site 28 actif."));
+  const { discordId, message } = req.body || {};
+
+  if (!oauthToken || !discordId || !message) {
+    return res.status(400).json({
+      error: "Authentification Discord, discordId et message requis"
+    });
+  }
+
+  try {
+    // Vérifie le compte Discord connecté au site
+    const meRes = await fetch("https://discord.com/api/users/@me", {
+      headers: {
+        Authorization: `Bearer ${oauthToken}`
+      }
+    });
+
+    if (!meRes.ok) {
+      return res.status(401).json({
+        error: "Session Discord invalide ou expirée"
+      });
+    }
+
+    const me = await meRes.json();
+
+    // Vérifie que la personne est membre du serveur
+    const guild = await client.guilds.fetch(GUILD_ID);
+    const staffMember = await guild.members.fetch(me.id);
+
+    // Seuls les membres avec Gestion du serveur ou Administrateur peuvent envoyer
+    const allowed =
+      staffMember.permissions.has(PermissionFlagsBits.ManageGuild) ||
+      staffMember.permissions.has(PermissionFlagsBits.Administrator);
+
+    if (!allowed) {
+      return res.status(403).json({
+        error: "Tu n'as pas les permissions staff requises pour envoyer un MP."
+      });
+    }
+
+    // Envoi du MP par le bot
+    const user = await client.users.fetch(discordId);
+    await user.send(message);
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("dm-oauth error:", e.message);
+    res.status(500).json({
+      error: "Impossible d'envoyer le MP (DMs peut-être fermés)."
+    });
+  }
+});
+app.get("/", (req, res) => res.send("BOT FIM SITE 28 actif."));
 
 client.once("ready", async () => {
   console.log(`Connecté en tant que ${client.user.tag}`);
