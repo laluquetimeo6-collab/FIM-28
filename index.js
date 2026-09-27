@@ -415,7 +415,7 @@ app.post("/api/dm-oauth", async (req, res) => {
 });
 app.get("/", (req, res) => res.send("BOT FIM SITE 28 actif."));
 
-client.once("ready", async () => {
+client.once("clientReady", async () => {
   console.log(`Connecté en tant que ${client.user.tag}`);
   try {
     const rest = new REST({ version: "10" }).setToken(TOKEN);
