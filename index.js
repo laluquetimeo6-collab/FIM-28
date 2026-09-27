@@ -26,7 +26,7 @@ if (!TOKEN || !GUILD_ID || !API_SECRET) {
 }
 
 // ---- Réglages anti-raid / anti-spam (ajuste si besoin) ----
-const RAID_JOIN_COUNT = 6;       // nb d'arrivées...
+const RAID_JOIN_COUNT = 15;      // nb d'arrivées...
 const RAID_JOIN_WINDOW_MS = 15000; // ...en moins de 15s = alerte raid
 const RAID_MIN_ACCOUNT_AGE_MS = 1000 * 60 * 60 * 24 * 3; // 3 jours
 
