@@ -1,16 +1,16 @@
 {
-  "name": "fim-site28-bot",
-  "version": "1.0.0",
-  "description": "Bot Discord FIM Site 28",
-  "main": "v.9.js",
+  "name": "fim-28-bot",
+  "version": "9.0.0",
+  "private": true,
+  "main": "index.js",
   "scripts": {
-    "start": "node v.9.js"
+    "start": "node index.js"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18.17.0"
   },
   "dependencies": {
-    "discord.js": "^14.14.1",
-    "express": "^4.19.2"
+    "discord.js": "^14.21.0",
+    "express": "^4.21.2"
   }
 }
