@@ -116,10 +116,6 @@
   .counts { color: var(--text-soft); font-size: 0.85rem; margin: -8px 0 22px; }
   .label { color: var(--text-soft); font-weight: 500; }
 
-  .webhook-box { background: var(--panel-alt); border: 1px solid var(--border); border-radius: 6px; padding: 16px 18px; margin: 0 0 26px; }
-  .webhook-box > label { display: block; font-size: 0.78rem; color: var(--text-soft); margin-bottom: 8px; }
-  .webhook-row { display: flex; gap: 8px; flex-wrap: wrap; }
-  .webhook-row input { flex: 1; min-width: 200px; }
   .hint { font-size: 0.76rem; color: var(--text-soft); margin: 8px 0 0; }
 
   .dossier { background: var(--panel-alt); border: 1px solid var(--border); border-left: 4px solid var(--gold); border-radius: 0 6px 6px 0; padding: 16px 18px; margin-bottom: 14px; }
@@ -182,7 +178,7 @@
   }
 
   // ⚠️ IMPORTANT — si le bouton "Enregistrer" ne fonctionne nulle part
-  // (candidatures, notes, webhook, postes, codex), la cause n°1 est presque
+  // (candidatures, notes, postes, codex), la cause n°1 est presque
   // toujours les règles de sécurité Firestore. Ce site utilise une connexion
   // Discord "maison" (uniquement côté navigateur) : Firestore n'a AUCUNE idée
   // de qui est admin ou non, donc `request.auth` est toujours `null` de son
@@ -627,7 +623,6 @@
     return `
       <div class="results-head"><h2 class="section-title">Registre des candidatures</h2></div>
       <p class="counts">${counts.attente || 0} en attente · ${counts.admis || 0} approuvées · ${counts.refuse || 0} refusées</p>
-      ${state.role === "admin" ? `<p class="hint" style="margin:0 0 22px;">Le webhook Discord se configure désormais par unité, dans « Gestion des postes ».</p>` : ""}
       ${state.applications.length === 0 ? `<p class="empty">Aucun dossier reçu.</p>` : state.applications.slice().reverse().map(renderStaffCard).join("")}
     `;
   }
@@ -743,7 +738,7 @@
         </div>
         <h3>${esc(u.name)}</h3>
         <p>${esc(u.description)}</p>
-        <p class="hint" style="margin:0 0 14px;">${(u.questions || []).length} question(s) · webhook ${u.webhookUrl ? "configuré" : "non configuré"}</p>
+        <p class="hint" style="margin:0 0 14px;">${(u.questions || []).length} question(s) · notifications Discord via le bot</p>
         <button class="btn-secondary editUnitBtn" data-id="${u.id}">Modifier</button>
       </div>
     `;
@@ -760,7 +755,6 @@
         <div class="field"><label for="u_name">Nom du poste</label><input id="u_name" name="name" type="text" maxlength="60" value="${esc(d.name)}" required></div>
         <div class="field"><label for="u_description">Description</label><textarea id="u_description" name="description" maxlength="400">${esc(d.description)}</textarea></div>
         <label class="field-inline"><input id="u_open" type="checkbox" ${d.open ? "checked" : ""}> Poste ouvert au recrutement</label>
-        <div class="field"><label for="u_webhook">Webhook Discord (ancien — plus utilisé : les notifications passent maintenant par le bot)</label><input id="u_webhook" name="webhookUrl" type="url" maxlength="300" value="${esc(d.webhookUrl || "")}" placeholder="https://discord.com/api/webhooks/…"></div>
 
         <h3 class="subsection-title">Questions du formulaire de candidature</h3>
         <p class="hint" style="margin:0 0 14px;">Pseudo Roblox et Âge sont toujours demandés automatiquement. Ajoute ici les questions propres à ce poste.</p>
@@ -890,8 +884,6 @@
     state.unitDraft.description = form.description.value;
     const openBox = document.getElementById("u_open");
     if (openBox) state.unitDraft.open = openBox.checked;
-    const webhookBox = document.getElementById("u_webhook");
-    if (webhookBox) state.unitDraft.webhookUrl = webhookBox.value;
     document.querySelectorAll(".q-label").forEach(inp => {
       const idx = Number(inp.dataset.idx);
       if (state.unitDraft.questions[idx]) state.unitDraft.questions[idx].label = inp.value;
@@ -954,7 +946,7 @@
     if (newUnitBtn) newUnitBtn.addEventListener("click", () => {
       state.editingUnitId = null;
       state.unitDraft = {
-        code: "", name: "", description: "", open: true, webhookUrl: "",
+        code: "", name: "", description: "", open: true,
         questions: [
           { id: newId(), label: "Expérience RP / SCP", type: "textarea" },
           { id: newId(), label: "Motivation", type: "textarea" },
@@ -970,7 +962,7 @@
         if (!unit) return;
         state.editingUnitId = unit.id;
         state.unitDraft = {
-          code: unit.code || "", name: unit.name || "", description: unit.description || "", open: !!unit.open, webhookUrl: unit.webhookUrl || "",
+          code: unit.code || "", name: unit.name || "", description: unit.description || "", open: !!unit.open,
           questions: (unit.questions || []).map(q => ({ id: q.id, label: q.label, type: q.type })),
         };
         state.view = "editUnit";
@@ -1194,6 +1186,10 @@
     const textarea = document.querySelector(`.notifyMsgInput[data-id="${id}"]`);
     const discordId = String(target.discordId || "").trim();
     const content = textarea ? textarea.value.trim() : defaultNotifyMessage(target, unit);
+    if (!/^\d{15,25}$/.test(discordId)) {
+      if (statusEl) statusEl.textContent = "✗ Discord non lié : le candidat doit se reconnecter avec Discord.";
+      return;
+    }
     if (!content) {
       if (statusEl) statusEl.textContent = "Le message ne peut pas être vide";
       return;
@@ -1255,14 +1251,19 @@
           message: content,
           discordId,
           discordUsername: target.discordUsername || null,
-          status: target.status
+          discordDisplayName: target.discordDisplayName || null,
+          status: target.status,
+          unitId: target.unitId,
+          unitCode: unit ? (unit.code || unit.name || null) : null
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
         target.discordId = discordId;
         let resultMessage = "✓ Envoyé sur Discord + @candidat";
-        if (target.status === "admis" && data.roleAssigned) resultMessage += " + rôle Cadet";
+        if (target.status === "admis" && data.roleAssigned) {
+          resultMessage += " + rôle " + (data.roleName || "Cadet");
+        }
         if (data.dmSent) resultMessage += " + MP";
         else if (data.dmError) resultMessage += " (MP impossible)";
         if (statusEl) statusEl.textContent = resultMessage;
@@ -1292,15 +1293,10 @@
       name: state.unitDraft.name.trim(),
       description: state.unitDraft.description.trim(),
       open: state.unitDraft.open,
-      webhookUrl: state.unitDraft.webhookUrl.trim(),
       questions: state.unitDraft.questions.filter(q => q.label.trim() !== ""),
     };
     if (!data.code || !data.name) {
       alert("Le code et le nom du poste sont obligatoires.");
-      return;
-    }
-    if (data.webhookUrl && !/^https:\/\/discord(?:app)?\.com\/api\/webhooks\//i.test(data.webhookUrl)) {
-      alert("Le webhook doit être une URL Discord valide.");
       return;
     }
     const submitBtn = e.target.querySelector('button[type="submit"]');

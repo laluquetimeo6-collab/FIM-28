@@ -18,7 +18,8 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID || null; // optionnel
 const NOTIFY_CHANNEL_ID = process.env.NOTIFY_CHANNEL_ID || null; // salon dédié aux notifications du site
-const CADET_ROLE_ID = process.env.CADET_ROLE_ID || null; // optionnel : sinon le bot cherche le rôle nommé « Cadet »
+const CADET_ROLE_E11_ID = process.env.CADET_ROLE_E_11_ID || null;
+const CADET_ROLE_NU7_ID = process.env.CADET_ROLE_NU_7_ID || null;
 const API_SECRET = process.env.API_SECRET;
 const PORT = process.env.PORT || 3000;
 
@@ -417,16 +418,25 @@ app.post("/api/dm-oauth", async (req, res) => {
 });
 // Notification dans un salon dédié (bouton "Notifier Discord" du site)
 app.post("/api/notify", async (req, res) => {
-  const { message, discordId: suppliedDiscordId, discordUsername, discordDisplayName, status } = req.body || {};
-  if (!message) return res.status(400).json({ error: "message requis" });
+  const {
+    message,
+    discordId: suppliedDiscordId,
+    discordUsername,
+    discordDisplayName,
+    status,
+    unitCode,
+    unitId,
+  } = req.body || {};
 
-  // Le fonctionnement principal utilise l'ID Discord exact.
-  // Le nom reste uniquement un secours pour les très anciennes candidatures.
+  if (!message) return res.status(400).json({ error: "message requis" });
+  if (!NOTIFY_CHANNEL_ID) {
+    return res.status(500).json({ error: "NOTIFY_CHANNEL_ID non configuré sur le serveur" });
+  }
+
   let discordId = suppliedDiscordId || null;
-  if (!NOTIFY_CHANNEL_ID) return res.status(500).json({ error: "NOTIFY_CHANNEL_ID non configuré sur le serveur" });
 
   try {
-    // Autorisé si : secret API valide OU compte Discord staff connecté au site
+    // Autorisé si : secret API valide OU compte Discord staff connecté au site.
     let allowed = !!API_SECRET && req.header("x-api-secret") === API_SECRET;
     if (!allowed) {
       const auth = req.header("authorization") || "";
@@ -449,8 +459,10 @@ app.post("/api/notify", async (req, res) => {
 
     const guild = await client.guilds.fetch(GUILD_ID);
 
+    // L'ID OAuth est prioritaire. La recherche par nom ne sert que de secours
+    // pour les très anciennes candidatures qui n'ont pas encore été synchronisées.
     let candidate = null;
-    if (discordId) {
+    if (/^\d{15,25}$/.test(String(discordId || ""))) {
       try {
         candidate = await guild.members.fetch(discordId);
       } catch (e) {
@@ -480,24 +492,40 @@ app.post("/api/notify", async (req, res) => {
 
     if (!candidate) {
       return res.status(404).json({
-        error: "Candidat Discord introuvable. Cette candidature ne contient pas de Discord ID valide et le nom Discord n'a pas permis de retrouver le membre."
+        error: "Candidat Discord introuvable. Vérifie que le candidat est membre du serveur Discord et que sa candidature est bien liée à son compte Discord."
       });
     }
 
     discordId = candidate.id;
 
-    // Une candidature acceptée attribue automatiquement le rôle Cadet.
-    // Si CADET_ROLE_ID est défini dans Render, il est utilisé. Sinon, le bot
-    // cherche automatiquement le premier rôle dont le nom est exactement « Cadet ».
+    // Choix du rôle Cadet selon l'unité de candidature.
+    // E-11 -> CADET_ROLE_E_11_ID
+    // NU-7 -> CADET_ROLE_NU_7_ID
     let roleAssigned = false;
     let cadetRole = null;
-    if (status === "admis") {
-      cadetRole = CADET_ROLE_ID
-        ? await guild.roles.fetch(CADET_ROLE_ID)
-        : guild.roles.cache.find(r => r.name.trim().toLowerCase() === "cadet");
+    let roleName = null;
 
+    if (status === "admis") {
+      const code = String(unitCode || unitId || "").trim().toUpperCase();
+      let cadetRoleId = null;
+
+      if (code.includes("E-11") || code.includes("E11")) {
+        cadetRoleId = CADET_ROLE_E11_ID;
+      } else if (code.includes("NU-7") || code.includes("NU7")) {
+        cadetRoleId = CADET_ROLE_NU7_ID;
+      }
+
+      if (!cadetRoleId) {
+        return res.status(400).json({
+          error: `Impossible de déterminer le rôle Cadet pour l'unité « ${unitCode || unitId || "inconnue"} ». Vérifie que le poste utilise bien le code E-11 ou NU-7.`
+        });
+      }
+
+      cadetRole = await guild.roles.fetch(cadetRoleId).catch(() => null);
       if (!cadetRole) {
-        return res.status(500).json({ error: "Rôle Cadet introuvable. Crée un rôle nommé « Cadet » sur Discord ou configure CADET_ROLE_ID sur Render." });
+        return res.status(500).json({
+          error: `Rôle Cadet introuvable pour ${unitCode || unitId}. Vérifie la variable Render correspondante.`
+        });
       }
       if (cadetRole.managed) {
         return res.status(500).json({ error: "Le rôle Cadet est géré par une intégration et ne peut pas être attribué par le bot." });
@@ -506,14 +534,16 @@ app.post("/api/notify", async (req, res) => {
         return res.status(500).json({ error: "Le bot ne peut pas gérer ce membre. Vérifie que son rôle est inférieur au rôle du bot." });
       }
       if (!cadetRole.editable) {
-        return res.status(500).json({ error: "Le bot ne peut pas attribuer le rôle Cadet. Place le rôle Cadet sous le rôle le plus haut du bot." });
+        return res.status(500).json({ error: "Le bot ne peut pas attribuer ce rôle. Place le rôle Cadet sous le rôle le plus haut du bot." });
       }
 
       await candidate.roles.add(cadetRole, "Attribution automatique — candidature acceptée");
       roleAssigned = true;
+      roleName = cadetRole.name;
+
       logEvent(
         "🎖️ Rôle Cadet attribué",
-        `Le rôle <@&${cadetRole.id}> a été attribué à ${candidate.user.tag} suite à l'acceptation de sa candidature.`
+        `Le rôle <@&${cadetRole.id}> a été attribué à ${candidate.user.tag} suite à l'acceptation de sa candidature (${unitCode || unitId || "unité inconnue"}).`
       );
     }
 
@@ -525,13 +555,13 @@ app.post("/api/notify", async (req, res) => {
       allowedMentions: { users: [discordId], parse: [] }
     });
 
-    // MP au candidat. Les DMs peuvent être fermés : dans ce cas, la notification
-    // du salon et l'attribution du rôle restent réussies.
+    // MP au candidat. Les DMs peuvent être fermés : le reste de la notification
+    // reste considéré comme réussi.
     let dmSent = false;
     let dmError = null;
     try {
       const dmMessage = status === "admis"
-        ? `🎉 **Félicitations !**\n\nTa candidature **FIM Site 28** a été approuvée.\n🎖️ Le rôle **Cadet** vient de t'être attribué sur le serveur Discord.\n\n${String(message).slice(0, 1200)}`
+        ? `🎉 **Félicitations !**\n\nTa candidature **FIM Site 28** a été approuvée.\n🎖️ Le rôle **${roleName || "Cadet"}** vient de t'être attribué sur le serveur Discord.\n\n${String(message).slice(0, 1200)}`
         : String(message).slice(0, 1900);
       await candidate.send(dmMessage);
       dmSent = true;
@@ -540,7 +570,7 @@ app.post("/api/notify", async (req, res) => {
       console.warn("notify DM error:", e.message);
     }
 
-    res.json({ ok: true, roleAssigned, dmSent, dmError });
+    res.json({ ok: true, roleAssigned, roleName, dmSent, dmError });
   } catch (e) {
     console.error("notify error:", e.message);
     res.status(500).json({ error: e.message || "Impossible d'envoyer la notification." });
