@@ -461,12 +461,13 @@ app.post("/api/notify", async (req, res) => {
     if (!candidate && discordUsername) {
       const wanted = String(discordUsername).trim().toLowerCase().replace(/^@/, "");
       try {
-        const found = await guild.members.fetch({ query: wanted, limit: 20 });
+        const found = await guild.members.fetch({ query: wanted, limit: 100 });
         candidate = found.find(m => {
           const u = m.user;
-          return String(u.username || "").toLowerCase() === wanted
-            || String(u.globalName || "").toLowerCase() === wanted
-            || String(m.displayName || "").toLowerCase() === wanted;
+          const values = [u.username, u.globalName, m.displayName, m.nickname]
+            .filter(Boolean)
+            .map(v => String(v).toLowerCase());
+          return values.includes(wanted);
         }) || null;
       } catch (e) {
         console.warn("Recherche du candidat par nom impossible:", e.message);
@@ -475,7 +476,7 @@ app.post("/api/notify", async (req, res) => {
 
     if (!candidate) {
       return res.status(404).json({
-        error: "Candidat Discord introuvable. Cette candidature ne contient pas de Discord ID valide et le nom Discord n'a pas permis de retrouver le membre."
+        error: "Candidat Discord introuvable. Renseigne son ID Discord dans la candidature puis réessaie."
       });
     }
 
