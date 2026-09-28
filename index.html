@@ -275,8 +275,7 @@
 
   function defaultNotifyMessage(a, unit) {
     const label = statusLabel(a.status);
-    const candidateName = a.discordDisplayName || a.discordUsername || "Candidat";
-    let msg = "📁 **Résultat — FIM Site 28 (" + (unit ? unit.name : "?") + ")**\nCandidat : " + candidateName + " (" + a.pseudoRoblox + ")\nStatut : **" + label + "**";
+    let msg = "📁 **Résultat — FIM Site 28 (" + (unit ? unit.name : "?") + ")**\nCandidat : " + a.discordUsername + " (" + a.pseudoRoblox + ")\nStatut : **" + label + "**";
     if (a.notes) msg += "\nRemarques : " + a.notes;
     if (a.status === "admis") msg += "\n🎖️ **Rôle Cadet attribué automatiquement + notification Discord.**";
     return msg;
@@ -626,17 +625,13 @@
           <label for="notes-${a.id}">Notes internes</label>
           <textarea id="notes-${a.id}" class="notesInput" data-id="${a.id}" maxlength="300">${esc(a.notes || "")}</textarea>
         </div>
-        <div class="field">
-          <label for="discordId-${a.id}">ID Discord du candidat</label>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-            <input id="discordId-${a.id}" class="candidateDiscordIdInput" data-id="${a.id}" type="text" inputmode="numeric" maxlength="25" value="${esc(a.discordId || "")}" placeholder="Ex. 123456789012345678" style="flex:1;min-width:220px;">
-            <button class="btn-secondary saveDiscordIdBtn" data-id="${a.id}">Enregistrer l'ID</button>
-          </div>
-          ${a.discordId
-            ? `<p class="hint">ID Discord enregistré : ${esc(a.discordId)}</p>`
-            : `<p class="hint" style="color:var(--red);">Aucun ID Discord enregistré. Renseigne l'ID Discord du candidat avant de notifier.</p>`}
-        </div>
         <div class="field notify-box">
+          <label for="discordId-${a.id}">ID Discord du candidat</label>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <input id="discordId-${a.id}" class="discordIdInput" data-id="${a.id}" type="text" inputmode="numeric" maxlength="25" value="${esc(a.discordId || "")}" placeholder="ex. 123456789012345678" style="flex:1;min-width:240px;">
+            <button type="button" class="btn-secondary saveDiscordIdBtn" data-id="${a.id}">Enregistrer l'ID</button>
+          </div>
+          <p class="hint">L'ID Discord est utilisé directement par le bot. Il permet d'attribuer le rôle Cadet, de faire la @mention et d'envoyer le MP sans dépendre du pseudo Discord.</p>
           <label for="notifyMsg-${a.id}">Message à envoyer sur Discord (modifiable — sera aussi gardé comme note dans « Résultats »)</label>
           <textarea id="notifyMsg-${a.id}" class="notifyMsgInput" data-id="${a.id}" maxlength="1000">${esc(defaultNotifyMessage(a, unit))}</textarea>
         </div>
@@ -911,11 +906,11 @@
     document.querySelectorAll(".saveNotesBtn").forEach(btn => {
       btn.addEventListener("click", e => handleSaveNotes(e.target.dataset.id));
     });
-    document.querySelectorAll(".saveDiscordIdBtn").forEach(btn => {
-      btn.addEventListener("click", e => handleSaveDiscordId(e.target.dataset.id));
-    });
     document.querySelectorAll(".deleteAppBtn").forEach(btn => {
       btn.addEventListener("click", e => handleDeleteApplication(e.target.dataset.id));
+    });
+    document.querySelectorAll(".saveDiscordIdBtn").forEach(btn => {
+      btn.addEventListener("click", e => handleSaveDiscordId(e.target.dataset.id));
     });
     document.querySelectorAll(".notifyBtn").forEach(btn => {
       btn.addEventListener("click", e => handleNotify(e.target.dataset.id));
@@ -1032,8 +1027,7 @@
     const newApp = {
       unitId: state.applyUnitId,
       discordId: state.discordUser.id,
-      discordUsername: state.discordUser.username || state.discordUser.display,
-      discordDisplayName: state.discordUser.display || state.discordUser.username,
+      discordUsername: state.discordUser.display,
       pseudoRoblox: form.pseudoRoblox.value.trim(),
       age: form.age.value,
       responses,
@@ -1121,6 +1115,29 @@
     render();
   }
 
+  async function handleSaveDiscordId(id) {
+    const input = document.querySelector(`.discordIdInput[data-id="${id}"]`);
+    const statusEl = document.querySelector(`.notify-status[data-id="${id}"]`);
+    if (!input) return;
+    const discordId = input.value.trim();
+    if (!/^\d{15,25}$/.test(discordId)) {
+      if (statusEl) statusEl.textContent = "✗ ID Discord invalide (15 à 25 chiffres)";
+      return;
+    }
+    const btn = document.querySelector(`.saveDiscordIdBtn[data-id="${id}"]`);
+    if (btn) { btn.disabled = true; btn.textContent = "Enregistrement…"; }
+    const ok = await updateApplicationDoc(id, { discordId });
+    if (!ok) {
+      if (btn) { btn.disabled = false; btn.textContent = "Réessayer"; }
+      if (statusEl) statusEl.textContent = "✗ Impossible d'enregistrer l'ID : " + (lastFirestoreError || "erreur inconnue");
+      return;
+    }
+    const target = state.applications.find(a => a.id === id);
+    if (target) target.discordId = discordId;
+    if (btn) { btn.disabled = false; btn.textContent = "ID enregistré ✓"; }
+    if (statusEl) statusEl.textContent = "✓ ID Discord enregistré";
+  }
+
   async function handleSaveNotes(id) {
     const btn = document.querySelector(`.saveNotesBtn[data-id="${id}"]`);
     const textarea = document.querySelector(`.notesInput[data-id="${id}"]`);
@@ -1136,49 +1153,14 @@
     render();
   }
 
-  async function handleSaveDiscordId(id) {
-    const target = state.applications.find(a => a.id === id);
-    if (!target) return;
-
-    const input = document.querySelector(`.candidateDiscordIdInput[data-id="${id}"]`);
-    const btn = document.querySelector(`.saveDiscordIdBtn[data-id="${id}"]`);
-    if (!input) return;
-
-    const discordId = input.value.trim();
-    if (!/^\\d{15,25}$/.test(discordId)) {
-      if (btn) btn.textContent = "✗ ID invalide";
-      setTimeout(() => { if (btn) btn.textContent = "Enregistrer l'ID"; }, 1800);
-      return;
-    }
-
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = "Enregistrement…";
-    }
-
-    const ok = await updateApplicationDoc(id, {
-      discordId,
-      discordIdUpdatedAt: new Date().toISOString()
-    });
-
-    if (!ok) {
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = "✗ Échec";
-      }
-      return;
-    }
-
-    state.applications = await loadApplications();
-    render();
-  }
-
   async function handleDM(id) {
     const target = state.applications.find(a => a.id === id);
     if (!target) return;
     const statusEl = document.querySelector(`.notify-status[data-id="${id}"]`);
     const unit = state.units.find(u => u.id === target.unitId);
     const textarea = document.querySelector(`.notifyMsgInput[data-id="${id}"]`);
+    const discordIdInput = document.querySelector(`.discordIdInput[data-id="${id}"]`);
+    const discordId = discordIdInput ? discordIdInput.value.trim() : (target.discordId || "");
     const content = textarea ? textarea.value.trim() : defaultNotifyMessage(target, unit);
     if (!content) {
       if (statusEl) statusEl.textContent = "Le message ne peut pas être vide";
@@ -1196,7 +1178,7 @@
           "Content-Type": "application/json",
           "Authorization": "Bearer " + state.discordAccessToken
         },
-        body: JSON.stringify({ discordId: target.discordId, message: content })
+        body: JSON.stringify({ discordId, message: content })
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
@@ -1215,17 +1197,19 @@
     const statusEl = document.querySelector(`.notify-status[data-id="${id}"]`);
     const unit = state.units.find(u => u.id === target.unitId);
     const textarea = document.querySelector(`.notifyMsgInput[data-id="${id}"]`);
+    const discordIdInput = document.querySelector(`.discordIdInput[data-id="${id}"]`);
+    const discordId = discordIdInput ? discordIdInput.value.trim() : (target.discordId || "");
     const content = textarea ? textarea.value.trim() : defaultNotifyMessage(target, unit);
+    if (!/^\d{15,25}$/.test(discordId)) {
+      if (statusEl) statusEl.textContent = "✗ ID Discord requis : renseigne l'ID du candidat puis réessaie.";
+      return;
+    }
     if (!content) {
       if (statusEl) statusEl.textContent = "Le message ne peut pas être vide";
       return;
     }
     if (!state.discordAccessToken) {
       if (statusEl) statusEl.textContent = "✗ Session Discord expirée — reconnecte-toi";
-      return;
-    }
-    if (!target.discordId || !/^\\d{15,25}$/.test(String(target.discordId))) {
-      if (statusEl) statusEl.textContent = "✗ ID Discord manquant : renseigne l'ID du candidat ci-dessus";
       return;
     }
     if (statusEl) statusEl.textContent = "Envoi…";
@@ -1238,13 +1222,14 @@
         },
         body: JSON.stringify({
           message: content,
-          discordId: target.discordId || null,
+          discordId,
           discordUsername: target.discordUsername || null,
           status: target.status
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
+        target.discordId = discordId;
         let resultMessage = "✓ Envoyé sur Discord + @candidat";
         if (target.status === "admis" && data.roleAssigned) resultMessage += " + rôle Cadet";
         if (data.dmSent) resultMessage += " + MP";
@@ -1253,7 +1238,6 @@
         await addResultDoc({
           unitId: target.unitId,
           applicationId: target.id,
-          discordId: target.discordId || "",
           discordUsername: target.discordUsername,
           pseudoRoblox: target.pseudoRoblox,
           status: target.status,
