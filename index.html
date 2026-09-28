@@ -721,7 +721,7 @@
         <div class="field"><label for="u_name">Nom du poste</label><input id="u_name" name="name" type="text" maxlength="60" value="${esc(d.name)}" required></div>
         <div class="field"><label for="u_description">Description</label><textarea id="u_description" name="description" maxlength="400">${esc(d.description)}</textarea></div>
         <label class="field-inline"><input id="u_open" type="checkbox" ${d.open ? "checked" : ""}> Poste ouvert au recrutement</label>
-        <div class="field"><label for="u_webhook">Webhook Discord de l'unité (les résultats de cette unité sont envoyés ici)</label><input id="u_webhook" name="webhookUrl" type="url" maxlength="300" value="${esc(d.webhookUrl || "")}" placeholder="https://discord.com/api/webhooks/…"></div>
+        <div class="field"><label for="u_webhook">Webhook Discord (ancien — plus utilisé : les notifications passent maintenant par le bot)</label><input id="u_webhook" name="webhookUrl" type="url" maxlength="300" value="${esc(d.webhookUrl || "")}" placeholder="https://discord.com/api/webhooks/…"></div>
 
         <h3 class="subsection-title">Questions du formulaire de candidature</h3>
         <p class="hint" style="margin:0 0 14px;">Pseudo Roblox et Âge sont toujours demandés automatiquement. Ajoute ici les questions propres à ce poste.</p>
@@ -1163,24 +1163,28 @@
     if (!target) return;
     const statusEl = document.querySelector(`.notify-status[data-id="${id}"]`);
     const unit = state.units.find(u => u.id === target.unitId);
-    if (!unit || !unit.webhookUrl) {
-      if (statusEl) statusEl.textContent = "Aucun webhook configuré pour cette unité (Gestion des postes)";
-      return;
-    }
     const textarea = document.querySelector(`.notifyMsgInput[data-id="${id}"]`);
     const content = textarea ? textarea.value.trim() : defaultNotifyMessage(target, unit);
     if (!content) {
       if (statusEl) statusEl.textContent = "Le message ne peut pas être vide";
       return;
     }
+    if (!state.discordAccessToken) {
+      if (statusEl) statusEl.textContent = "✗ Session Discord expirée — reconnecte-toi";
+      return;
+    }
     if (statusEl) statusEl.textContent = "Envoi…";
     try {
-      const res = await fetch(unit.webhookUrl, {
+      const res = await fetch("https://fim-28.onrender.com/api/notify", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content }),
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + state.discordAccessToken
+        },
+        body: JSON.stringify({ message: content }),
       });
-      if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
         if (statusEl) statusEl.textContent = "✓ Envoyé au salon";
         await addResultDoc({
           unitId: target.unitId,
@@ -1193,7 +1197,7 @@
         });
         state.results = await loadResults();
       } else {
-        if (statusEl) statusEl.textContent = "✗ Échec (" + res.status + ")";
+        if (statusEl) statusEl.textContent = "✗ Échec : " + (data.error || res.status);
       }
     } catch (err) {
       if (statusEl) statusEl.textContent = "✗ Échec réseau";
