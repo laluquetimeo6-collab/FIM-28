@@ -17,6 +17,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID || null; // optionnel
+const NOTIFY_CHANNEL_ID = process.env.NOTIFY_CHANNEL_ID || null; // salon dédié aux notifications du site
 const API_SECRET = process.env.API_SECRET;
 const PORT = process.env.PORT || 3000;
 
@@ -413,6 +414,44 @@ app.post("/api/dm-oauth", async (req, res) => {
     });
   }
 });
+// Notification dans un salon dédié (bouton "Notifier Discord" du site)
+app.post("/api/notify", async (req, res) => {
+  const { message } = req.body || {};
+  if (!message) return res.status(400).json({ error: "message requis" });
+  if (!NOTIFY_CHANNEL_ID) return res.status(500).json({ error: "NOTIFY_CHANNEL_ID non configuré sur le serveur" });
+
+  try {
+    // Autorisé si : secret API valide OU compte Discord staff connecté au site
+    let allowed = !!API_SECRET && req.header("x-api-secret") === API_SECRET;
+    if (!allowed) {
+      const auth = req.header("authorization") || "";
+      const oauthToken = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+      if (oauthToken) {
+        const meRes = await fetch("https://discord.com/api/users/@me", {
+          headers: { Authorization: `Bearer ${oauthToken}` }
+        });
+        if (meRes.ok) {
+          const me = await meRes.json();
+          const guild = await client.guilds.fetch(GUILD_ID);
+          const member = await guild.members.fetch(me.id);
+          allowed =
+            member.permissions.has(PermissionFlagsBits.ManageGuild) ||
+            member.permissions.has(PermissionFlagsBits.Administrator);
+        }
+      }
+    }
+    if (!allowed) return res.status(401).json({ error: "unauthorized" });
+
+    const channel = await client.channels.fetch(NOTIFY_CHANNEL_ID);
+    // parse: [] => aucun ping possible via le texte saisi sur le site
+    await channel.send({ content: String(message).slice(0, 2000), allowedMentions: { parse: [] } });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("notify error:", e.message);
+    res.status(500).json({ error: "Impossible d'envoyer la notification." });
+  }
+});
+
 app.get("/", (req, res) => res.send("BOT FIM SITE 28 actif."));
 
 client.once("clientReady", async () => {
