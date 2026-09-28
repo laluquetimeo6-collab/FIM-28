@@ -1183,7 +1183,8 @@
         },
         body: JSON.stringify({
           message: content,
-          discordId: target.discordId,
+          discordId: target.discordId || null,
+          discordUsername: target.discordUsername || null,
           status: target.status
         }),
       });
