@@ -277,7 +277,7 @@
     const label = statusLabel(a.status);
     let msg = "📁 **Résultat — FIM Site 28 (" + (unit ? unit.name : "?") + ")**\nCandidat : " + a.discordUsername + " (" + a.pseudoRoblox + ")\nStatut : **" + label + "**";
     if (a.notes) msg += "\nRemarques : " + a.notes;
-    if (a.status === "admis") msg += "\n🎖️ Rôle à attribuer manuellement : **" + (unit ? unit.name : "?") + "**";
+    if (a.status === "admis") msg += "\n🎖️ **Rôle Cadet attribué automatiquement + notification Discord.**";
     return msg;
   }
 
@@ -1181,11 +1181,19 @@
           "Content-Type": "application/json",
           "Authorization": "Bearer " + state.discordAccessToken
         },
-        body: JSON.stringify({ message: content }),
+        body: JSON.stringify({
+          message: content,
+          discordId: target.discordId,
+          status: target.status
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
-        if (statusEl) statusEl.textContent = "✓ Envoyé au salon";
+        let resultMessage = "✓ Envoyé sur Discord + @candidat";
+        if (target.status === "admis" && data.roleAssigned) resultMessage += " + rôle Cadet";
+        if (data.dmSent) resultMessage += " + MP";
+        else if (data.dmError) resultMessage += " (MP impossible)";
+        if (statusEl) statusEl.textContent = resultMessage;
         await addResultDoc({
           unitId: target.unitId,
           applicationId: target.id,
