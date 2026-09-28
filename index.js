@@ -417,9 +417,12 @@ app.post("/api/dm-oauth", async (req, res) => {
 });
 // Notification dans un salon dédié (bouton "Notifier Discord" du site)
 app.post("/api/notify", async (req, res) => {
-  const { message, discordId, status } = req.body || {};
+  const { message, discordId: suppliedDiscordId, discordUsername, status } = req.body || {};
   if (!message) return res.status(400).json({ error: "message requis" });
-  if (!discordId) return res.status(400).json({ error: "discordId requis" });
+
+  // Certaines anciennes candidatures n'ont pas encore enregistré le Discord ID.
+  // On essaie alors de retrouver le membre avec son nom Discord.
+  let discordId = suppliedDiscordId || null;
   if (!NOTIFY_CHANNEL_ID) return res.status(500).json({ error: "NOTIFY_CHANNEL_ID non configuré sur le serveur" });
 
   try {
@@ -445,7 +448,38 @@ app.post("/api/notify", async (req, res) => {
     if (!allowed) return res.status(401).json({ error: "unauthorized" });
 
     const guild = await client.guilds.fetch(GUILD_ID);
-    const candidate = await guild.members.fetch(discordId);
+
+    let candidate = null;
+    if (discordId) {
+      try {
+        candidate = await guild.members.fetch(discordId);
+      } catch (e) {
+        candidate = null;
+      }
+    }
+
+    if (!candidate && discordUsername) {
+      const wanted = String(discordUsername).trim().toLowerCase().replace(/^@/, "");
+      try {
+        const found = await guild.members.fetch({ query: wanted, limit: 20 });
+        candidate = found.find(m => {
+          const u = m.user;
+          return String(u.username || "").toLowerCase() === wanted
+            || String(u.globalName || "").toLowerCase() === wanted
+            || String(m.displayName || "").toLowerCase() === wanted;
+        }) || null;
+      } catch (e) {
+        console.warn("Recherche du candidat par nom impossible:", e.message);
+      }
+    }
+
+    if (!candidate) {
+      return res.status(404).json({
+        error: "Candidat Discord introuvable. Cette candidature ne contient pas de Discord ID valide et le nom Discord n'a pas permis de retrouver le membre."
+      });
+    }
+
+    discordId = candidate.id;
 
     // Une candidature acceptée attribue automatiquement le rôle Cadet.
     // Si CADET_ROLE_ID est défini dans Render, il est utilisé. Sinon, le bot
