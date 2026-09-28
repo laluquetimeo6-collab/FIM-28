@@ -298,6 +298,40 @@
     try { await addDoc(collection(db, "applications"), data); return true; }
     catch (e) { console.error(e); lastFirestoreError = describeError(e); return false; }
   }
+
+  // Répare automatiquement les anciennes candidatures créées avant
+  // l'enregistrement du Discord ID. Dès que le candidat se reconnecte
+  // avec Discord, son ID OAuth exact est rattaché à ses anciennes
+  // candidatures qui portent encore son ancien nom Discord.
+  async function syncOwnDiscordIds(applications, discordUser) {
+    if (!discordUser || !discordUser.id) return applications;
+    const names = new Set([
+      String(discordUser.username || "").trim().toLowerCase().replace(/^@/, ""),
+      String(discordUser.display || "").trim().toLowerCase().replace(/^@/, "")
+    ].filter(Boolean));
+
+    const matches = applications.filter(a => {
+      if (a.discordId) return false;
+      const saved = String(a.discordUsername || "").trim().toLowerCase().replace(/^@/, "");
+      return saved && names.has(saved);
+    });
+
+    for (const app of matches) {
+      try {
+        await updateDoc(doc(db, "applications", app.id), {
+          discordId: discordUser.id,
+          discordUsername: discordUser.username || discordUser.display,
+          discordDisplayName: discordUser.display || discordUser.username
+        });
+        app.discordId = discordUser.id;
+        app.discordUsername = discordUser.username || discordUser.display;
+        app.discordDisplayName = discordUser.display || discordUser.username;
+      } catch (e) {
+        console.warn("Synchronisation Discord impossible pour", app.id, e);
+      }
+    }
+    return applications;
+  }
   async function updateApplicationDoc(id, changes) {
     try { await updateDoc(doc(db, "applications", id), changes); return true; }
     catch (e) { console.error(e); lastFirestoreError = describeError(e); return false; }
@@ -604,7 +638,7 @@
         <div class="dossier-head">
           <span class="tag tag-unit">${esc(unit ? unit.code : "?")}</span>
           <strong>${esc(a.pseudoRoblox)}</strong>
-          <span class="discord">@${esc(a.discordUsername)}</span>
+          <span class="discord">@${esc(a.discordUsername || a.discordDisplayName || "")}</span>
           <span class="age">${esc(String(a.age))} ans</span>
           ${refCount > 0 ? `<span class="tag" style="background:#5a2323;color:#f5b5b5;">${refCount}/3 refus</span>` : ""}
         </div>
@@ -1026,8 +1060,10 @@
     });
     const newApp = {
       unitId: state.applyUnitId,
+      // ID Discord fourni directement par OAuth Discord — jamais par le pseudo.
       discordId: state.discordUser.id,
-      discordUsername: state.discordUser.display,
+      discordUsername: state.discordUser.username || state.discordUser.display,
+      discordDisplayName: state.discordUser.display || state.discordUser.username,
       pseudoRoblox: form.pseudoRoblox.value.trim(),
       age: form.age.value,
       responses,
@@ -1389,6 +1425,9 @@
       state.role = getRole(state.discordUser.id);
       state.view = state.role ? "staff" : "candidat";
       state.applications = await loadApplications();
+      // Si cette personne avait déjà candidaté avec une ancienne version du site,
+      // son ID Discord OAuth est automatiquement rattaché à ses candidatures.
+      state.applications = await syncOwnDiscordIds(state.applications, state.discordUser);
       state.units = await loadUnits();
       state.codices = await loadCodices();
       if (state.role) {
