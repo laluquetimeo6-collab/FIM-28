@@ -312,8 +312,11 @@
 
     const matches = applications.filter(a => {
       if (a.discordId) return false;
-      const saved = String(a.discordUsername || "").trim().toLowerCase().replace(/^@/, "");
-      return saved && names.has(saved);
+      const savedNames = [
+        String(a.discordUsername || "").trim().toLowerCase().replace(/^@/, ""),
+        String(a.discordDisplayName || "").trim().toLowerCase().replace(/^@/, "")
+      ].filter(Boolean);
+      return savedNames.some(saved => names.has(saved));
     });
 
     for (const app of matches) {
@@ -660,12 +663,9 @@
           <textarea id="notes-${a.id}" class="notesInput" data-id="${a.id}" maxlength="300">${esc(a.notes || "")}</textarea>
         </div>
         <div class="field notify-box">
-          <label for="discordId-${a.id}">ID Discord du candidat</label>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <input id="discordId-${a.id}" class="discordIdInput" data-id="${a.id}" type="text" inputmode="numeric" maxlength="25" value="${esc(a.discordId || "")}" placeholder="ex. 123456789012345678" style="flex:1;min-width:240px;">
-            <button type="button" class="btn-secondary saveDiscordIdBtn" data-id="${a.id}">Enregistrer l'ID</button>
-          </div>
-          <p class="hint">L'ID Discord est utilisé directement par le bot. Il permet d'attribuer le rôle Cadet, de faire la @mention et d'envoyer le MP sans dépendre du pseudo Discord.</p>
+          <p class="hint" style="margin:0 0 10px;">${a.discordId
+            ? "✓ Discord du candidat lié automatiquement par OAuth. Le bot utilisera cet identifiant exact."
+            : "⚠ Discord non encore lié. Si le candidat se reconnecte avec Discord, son identifiant sera rattaché automatiquement à cette candidature."}</p>
           <label for="notifyMsg-${a.id}">Message à envoyer sur Discord (modifiable — sera aussi gardé comme note dans « Résultats »)</label>
           <textarea id="notifyMsg-${a.id}" class="notifyMsgInput" data-id="${a.id}" maxlength="1000">${esc(defaultNotifyMessage(a, unit))}</textarea>
         </div>
@@ -943,9 +943,6 @@
     document.querySelectorAll(".deleteAppBtn").forEach(btn => {
       btn.addEventListener("click", e => handleDeleteApplication(e.target.dataset.id));
     });
-    document.querySelectorAll(".saveDiscordIdBtn").forEach(btn => {
-      btn.addEventListener("click", e => handleSaveDiscordId(e.target.dataset.id));
-    });
     document.querySelectorAll(".notifyBtn").forEach(btn => {
       btn.addEventListener("click", e => handleNotify(e.target.dataset.id));
     });
@@ -1195,8 +1192,7 @@
     const statusEl = document.querySelector(`.notify-status[data-id="${id}"]`);
     const unit = state.units.find(u => u.id === target.unitId);
     const textarea = document.querySelector(`.notifyMsgInput[data-id="${id}"]`);
-    const discordIdInput = document.querySelector(`.discordIdInput[data-id="${id}"]`);
-    const discordId = discordIdInput ? discordIdInput.value.trim() : (target.discordId || "");
+    const discordId = String(target.discordId || "").trim();
     const content = textarea ? textarea.value.trim() : defaultNotifyMessage(target, unit);
     if (!content) {
       if (statusEl) statusEl.textContent = "Le message ne peut pas être vide";
@@ -1233,11 +1229,10 @@
     const statusEl = document.querySelector(`.notify-status[data-id="${id}"]`);
     const unit = state.units.find(u => u.id === target.unitId);
     const textarea = document.querySelector(`.notifyMsgInput[data-id="${id}"]`);
-    const discordIdInput = document.querySelector(`.discordIdInput[data-id="${id}"]`);
-    const discordId = discordIdInput ? discordIdInput.value.trim() : (target.discordId || "");
+    const discordId = String(target.discordId || "").trim();
     const content = textarea ? textarea.value.trim() : defaultNotifyMessage(target, unit);
     if (!/^\d{15,25}$/.test(discordId)) {
-      if (statusEl) statusEl.textContent = "✗ ID Discord requis : renseigne l'ID du candidat puis réessaie.";
+      if (statusEl) statusEl.textContent = "✗ Discord non lié : le candidat doit se reconnecter avec Discord pour que son identifiant soit récupéré automatiquement.";
       return;
     }
     if (!content) {
