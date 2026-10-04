@@ -160,6 +160,12 @@
   @media (prefers-reduced-motion: no-preference) {
     .btn-primary, .btn-secondary, .btn-discord { transition: background-color 0.15s ease; }
   }
+  .role-modal-back { position: fixed; inset: 0; background: rgba(0,0,0,0.72); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 16px; }
+  .role-modal { background: var(--panel); border: 1px solid var(--border-strong); border-radius: 10px; padding: 22px 20px; max-width: 460px; width: 100%; max-height: 90vh; overflow: auto; }
+  .role-modal h3 { font-family: 'Cinzel', serif; font-size: 1rem; color: var(--gold-bright); margin: 0 0 8px; }
+  .role-opt { display: flex; gap: 10px; align-items: center; padding: 9px 0; cursor: pointer; flex-wrap: wrap; }
+  .role-opt code { font-size: 0.72rem; color: var(--text-soft); }
+  .role-modal-err { color: #f5b5b5; font-size: 0.82rem; min-height: 1.1em; margin: 6px 0; }
 </style>
 </head>
 <body>
@@ -277,7 +283,7 @@
     const label = statusLabel(a.status);
     let msg = "📁 **Résultat — FIM Intersite (" + (unit ? unit.name : "?") + ")**\nCandidat : " + a.discordUsername + " (" + a.pseudoRoblox + ")\nStatut : **" + label + "**";
     if (a.notes) msg += "\nRemarques : " + a.notes;
-    if (a.status === "admis") msg += "\n🎖️ **Rôle Cadet attribué automatiquement + notification Discord.**";
+    if (a.status === "admis") msg += "\n🎖️ **Rôle(s) attribué(s) + notification Discord.**";
     return msg;
   }
 
@@ -665,7 +671,7 @@
             <input id="discordId-${a.id}" class="discordIdInput" data-id="${a.id}" type="text" inputmode="numeric" maxlength="25" value="${esc(a.discordId || "")}" placeholder="ex. 123456789012345678" style="flex:1;min-width:240px;">
             <button type="button" class="btn-secondary saveDiscordIdBtn" data-id="${a.id}">Enregistrer l'ID</button>
           </div>
-          <p class="hint">L'ID Discord est utilisé directement par le bot. Il permet d'attribuer le rôle Cadet, de faire la @mention et d'envoyer le MP sans dépendre du pseudo Discord.</p>
+          <p class="hint">L'ID Discord est utilisé directement par le bot. Il permet d'attribuer des rôles, de faire la @mention et d'envoyer le MP sans dépendre du pseudo Discord.</p>
           <label for="notifyMsg-${a.id}">Message à envoyer sur Discord (modifiable — sera aussi gardé comme note dans « Résultats »)</label>
           <textarea id="notifyMsg-${a.id}" class="notifyMsgInput" data-id="${a.id}" maxlength="1000">${esc(defaultNotifyMessage(a, unit))}</textarea>
         </div>
@@ -947,10 +953,10 @@
       btn.addEventListener("click", e => handleSaveDiscordId(e.target.dataset.id));
     });
     document.querySelectorAll(".notifyBtn").forEach(btn => {
-      btn.addEventListener("click", e => handleNotify(e.target.dataset.id));
+      btn.addEventListener("click", e => openRoleModal(e.target.dataset.id, "notify"));
     });
     document.querySelectorAll(".dmBtn").forEach(btn => {
-      btn.addEventListener("click", e => handleDM(e.target.dataset.id));
+      btn.addEventListener("click", e => openRoleModal(e.target.dataset.id, "dm"));
     });
 
     const newUnitBtn = document.getElementById("newUnitBtn");
@@ -1189,7 +1195,59 @@
     render();
   }
 
-  async function handleDM(id) {
+  /* ---------- Choix des rôles avant Notifier Discord / MP ---------- */
+  const ROLE_PRESETS = [
+    { id: "1556333597131145367", label: "Cadet" },
+    { id: "1556333639183245372", label: "Opérateur E-11" },
+    { id: "1556333675153461248", label: "Opérateur Nu-7" },
+  ];
+
+  function openRoleModal(appId, mode) {
+    const target = state.applications.find(a => a.id === appId);
+    if (!target) return;
+    const preChecked = target.status === "admis" ? [ROLE_PRESETS[0].id] : [];
+    const back = document.createElement("div");
+    back.className = "role-modal-back";
+    back.innerHTML = `
+      <div class="role-modal" role="dialog" aria-modal="true">
+        <h3>Rôles à attribuer</h3>
+        <p class="hint">Coche les rôles que le bot doit donner à ${esc(target.discordUsername || "ce candidat")}. Rien de coché = aucun rôle.</p>
+        ${ROLE_PRESETS.map(r => `
+          <label class="role-opt"><input type="checkbox" class="roleChk" value="${r.id}" ${preChecked.indexOf(r.id) !== -1 ? "checked" : ""}> <span>${esc(r.label)}</span> <code>${r.id}</code></label>
+        `).join("")}
+        <div class="field">
+          <label for="roleCustom">Autres ID de rôles (séparés par des virgules)</label>
+          <input id="roleCustom" type="text" inputmode="numeric" placeholder="ex. 123456789012345678, 987654321098765432">
+        </div>
+        <p class="role-modal-err" id="roleErr"></p>
+        <div class="dossier-actions">
+          <button type="button" class="btn-primary" id="roleGo">${mode === "dm" ? "Envoyer le MP" : "Envoyer sur Discord"}</button>
+          <button type="button" class="btn-secondary" id="roleCancel">Annuler</button>
+        </div>
+      </div>`;
+    document.body.appendChild(back);
+
+    const close = () => { document.removeEventListener("keydown", onKey); back.remove(); };
+    const onKey = e => { if (e.key === "Escape") close(); };
+    document.addEventListener("keydown", onKey);
+    back.addEventListener("click", e => { if (e.target === back) close(); });
+    back.querySelector("#roleCancel").addEventListener("click", close);
+    back.querySelector("#roleGo").addEventListener("click", () => {
+      const ids = Array.from(back.querySelectorAll(".roleChk:checked")).map(c => c.value);
+      const custom = back.querySelector("#roleCustom").value.split(/[\s,;]+/).filter(Boolean);
+      for (const c of custom) {
+        if (!/^\d{15,25}$/.test(c)) {
+          back.querySelector("#roleErr").textContent = "✗ ID de rôle invalide : « " + c + " » (15 à 25 chiffres).";
+          return;
+        }
+        if (ids.indexOf(c) === -1) ids.push(c);
+      }
+      close();
+      if (mode === "dm") handleDM(appId, ids); else handleNotify(appId, ids);
+    });
+  }
+
+  async function handleDM(id, roleIds = []) {
     const target = state.applications.find(a => a.id === id);
     if (!target) return;
     const statusEl = document.querySelector(`.notify-status[data-id="${id}"]`);
@@ -1214,11 +1272,11 @@
           "Content-Type": "application/json",
           "Authorization": "Bearer " + state.discordAccessToken
         },
-        body: JSON.stringify({ discordId, message: content })
+        body: JSON.stringify({ discordId, message: content, roleIds })
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
-        if (statusEl) statusEl.textContent = "✓ MP privé envoyé";
+        if (statusEl) statusEl.textContent = "✓ MP privé envoyé" + (data.assignedRoles && data.assignedRoles.length ? " + rôle(s) : " + data.assignedRoles.join(", ") : "");
       } else {
         if (statusEl) statusEl.textContent = "✗ MP échoué : " + (data.error || res.status);
       }
@@ -1227,7 +1285,7 @@
     }
   }
 
-  async function handleNotify(id) {
+  async function handleNotify(id, roleIds = []) {
     const target = state.applications.find(a => a.id === id);
     if (!target) return;
     const statusEl = document.querySelector(`.notify-status[data-id="${id}"]`);
@@ -1260,14 +1318,15 @@
           message: content,
           discordId,
           discordUsername: target.discordUsername || null,
-          status: target.status
+          status: target.status,
+          roleIds
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
         target.discordId = discordId;
         let resultMessage = "✓ Envoyé sur Discord + @candidat";
-        if (target.status === "admis" && data.roleAssigned) resultMessage += " + rôle Cadet";
+        if (data.assignedRoles && data.assignedRoles.length) resultMessage += " + rôle(s) : " + data.assignedRoles.join(", ");
         if (data.dmSent) resultMessage += " + MP";
         else if (data.dmError) resultMessage += " (MP impossible)";
         if (statusEl) statusEl.textContent = resultMessage;
