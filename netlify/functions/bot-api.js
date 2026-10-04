@@ -7,7 +7,7 @@
 const API = "https://discord.com/api/v10";
 const UA = "DiscordBot (https://intersite-fim.netlify.app, 1.0.0)";
 const BOT_TOKEN = process.env.DISCORD_TOKEN;
-const GUILD_ID = process.env.GUILD_ID || "1556332580650098738";
+const GUILD_ID = process.env.GUILD_ID;
 const NOTIFY_CHANNEL_ID = process.env.NOTIFY_CHANNEL_ID;
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID || null;
 const CADET_ROLE_ID = process.env.CADET_ROLE_ID || "1556333597131145367";
@@ -198,6 +198,7 @@ async function actionNotify(me, body, rolesList) {
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") return json(405, { error: "POST requis" });
   if (!BOT_TOKEN) return json(500, { error: "DISCORD_TOKEN non configuré sur Netlify" });
+  if (!GUILD_ID) return json(500, { error: "GUILD_ID non configuré sur Netlify" });
 
   const action = (event.queryStringParameters || {}).action;
   const auth = (event.headers && (event.headers.authorization || event.headers.Authorization)) || "";
