@@ -309,45 +309,52 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // ---------------- VÉRIFICATION DU COMPTE DISCORD (OAuth) ----------------
-// Discord renvoie parfois 429 aux requêtes venant d'hébergeurs partagés (Render) quand
-// elles n'ont pas de User-Agent propre. On en met un, on réessaie une fois, et on garde
-// le résultat 5 minutes en mémoire pour ne pas rappeler Discord à chaque clic.
+// Discord renvoie parfois 429 aux requêtes venant d'hébergeurs partagés (Render).
+// On essaie 2 routes différentes (users/@me puis oauth2/@me), avec un User-Agent propre,
+// et on garde le résultat 5 minutes en mémoire pour ne pas rappeler Discord à chaque clic.
 const tokenCache = new Map(); // token -> { user, exp }
+const DISCORD_UA = "DiscordBot (https://intersite-fim.netlify.app, 1.0.0)";
+
 async function getDiscordUser(token) {
   const cached = tokenCache.get(token);
   if (cached && cached.exp > Date.now()) return { ok: true, user: cached.user };
 
-  let lastStatus = 0;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await fetch("https://discord.com/api/v10/users/@me", {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "User-Agent": "DiscordBot (https://intersite-fim.netlify.app, 1.0.0)",
-      },
-    });
-    if (r.ok) {
-      const user = await r.json();
-      if (tokenCache.size > 200) tokenCache.clear();
-      tokenCache.set(token, { user, exp: Date.now() + 5 * 60 * 1000 });
-      return { ok: true, user };
+  const routes = [
+    { url: "https://discord.com/api/v10/users/@me", pick: d => d },
+    { url: "https://discord.com/api/v10/oauth2/@me", pick: d => d && d.user },
+  ];
+  let last = { status: 0, detail: "" };
+  for (const route of routes) {
+    try {
+      const r = await fetch(route.url, {
+        headers: { Authorization: `Bearer ${token}`, "User-Agent": DISCORD_UA },
+      });
+      if (r.ok) {
+        const user = route.pick(await r.json());
+        if (user && user.id) {
+          if (tokenCache.size > 200) tokenCache.clear();
+          tokenCache.set(token, { user, exp: Date.now() + 5 * 60 * 1000 });
+          return { ok: true, user };
+        }
+        continue;
+      }
+      const body = await r.text().catch(() => "");
+      const detail = body.replace(/\s+/g, " ").slice(0, 140);
+      console.error("Discord", route.url, "a répondu", r.status, detail);
+      last = { status: r.status, detail };
+    } catch (e) {
+      console.error("Discord", route.url, "erreur réseau:", e.message);
+      last = { status: 0, detail: e.message };
     }
-    lastStatus = r.status;
-    const body = await r.text().catch(() => "");
-    console.error("Discord /users/@me a répondu", r.status, body.slice(0, 200));
-    if (r.status === 429 && attempt === 0) {
-      const wait = Math.min(Number(r.headers.get("retry-after")) || 2, 5);
-      await new Promise(resolve => setTimeout(resolve, wait * 1000));
-      continue;
-    }
-    break;
   }
-  return { ok: false, status: lastStatus };
+  return { ok: false, status: last.status, detail: last.detail };
 }
 
-function sessionErrorMessage(status) {
-  return status === 429
-    ? "Discord limite temporairement les requêtes du serveur (HTTP 429). Attends 30 secondes puis réessaie."
-    : `Discord a refusé la session (HTTP ${status}). Déconnecte-toi puis reconnecte-toi sur le site.`;
+function sessionErrorMessage(check) {
+  if (check.status === 429) {
+    return `Discord limite les requêtes du serveur (HTTP 429). Détail : ${check.detail || "aucun"}`;
+  }
+  return `Discord a refusé la session (HTTP ${check.status}${check.detail ? " — " + check.detail : ""}). Déconnecte-toi puis reconnecte-toi sur le site.`;
 }
 
 // ---------------- RÔLES CHOISIS DEPUIS LE SITE ----------------
@@ -448,7 +455,7 @@ app.post("/api/dm-oauth", async (req, res) => {
     // Vérifie le compte Discord connecté au site
     const meCheck = await getDiscordUser(oauthToken);
     if (!meCheck.ok) {
-      return res.status(401).json({ error: sessionErrorMessage(meCheck.status) });
+      return res.status(401).json({ error: sessionErrorMessage(meCheck) });
     }
     const me = meCheck.user;
 
@@ -525,7 +532,7 @@ app.post("/api/notify", async (req, res) => {
             staffMember.permissions.has(PermissionFlagsBits.Administrator);
           if (!allowed) console.error("notify : le compte", me.id, "n'a pas Gérer le serveur / Administrateur sur le serveur.");
         } else {
-          return res.status(401).json({ error: sessionErrorMessage(meCheck.status) });
+          return res.status(401).json({ error: sessionErrorMessage(meCheck) });
         }
       }
     }
