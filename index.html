@@ -1266,7 +1266,7 @@
     }
     if (statusEl) statusEl.textContent = "Envoi du MP…";
     try {
-      const res = await fetch("https://fim-28.onrender.com/api/dm-oauth", {
+      const res = await fetch("/.netlify/functions/bot-api?action=dm", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1308,7 +1308,7 @@
     }
     if (statusEl) statusEl.textContent = "Envoi…";
     try {
-      const res = await fetch("https://fim-28.onrender.com/api/notify", {
+      const res = await fetch("/.netlify/functions/bot-api?action=notify", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
