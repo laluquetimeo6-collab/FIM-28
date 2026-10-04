@@ -411,8 +411,10 @@ app.post("/api/dm-oauth", async (req, res) => {
     });
 
     if (!meRes.ok) {
+      const body = await meRes.text().catch(() => "");
+      console.error("dm-oauth : Discord /users/@me a répondu", meRes.status, body.slice(0, 200));
       return res.status(401).json({
-        error: "Session Discord invalide ou expirée"
+        error: `Discord a refusé la session (HTTP ${meRes.status}). Déconnecte-toi puis reconnecte-toi sur le site.`
       });
     }
 
@@ -491,10 +493,15 @@ app.post("/api/notify", async (req, res) => {
           allowed =
             staffMember.permissions.has(PermissionFlagsBits.ManageGuild) ||
             staffMember.permissions.has(PermissionFlagsBits.Administrator);
+          if (!allowed) console.error("notify : le compte", me.id, "n'a pas Gérer le serveur / Administrateur sur le serveur.");
+        } else {
+          const body = await meRes.text().catch(() => "");
+          console.error("notify : Discord /users/@me a répondu", meRes.status, body.slice(0, 200));
+          return res.status(401).json({ error: `Discord a refusé la session (HTTP ${meRes.status}). Déconnecte-toi puis reconnecte-toi sur le site.` });
         }
       }
     }
-    if (!allowed) return res.status(401).json({ error: "unauthorized" });
+    if (!allowed) return res.status(401).json({ error: "Accès refusé : ton compte Discord doit avoir « Gérer le serveur » ou « Administrateur » sur le serveur." });
 
     const guild = await client.guilds.fetch(GUILD_ID);
 
@@ -588,7 +595,13 @@ app.post("/api/notify", async (req, res) => {
 
 app.get("/", (req, res) => res.send("BOT FIM INTERSITE actif."));
 
-client.once("clientReady", async () => {
+// Le port HTTP s'ouvre TOUT DE SUITE (Render exige un port ouvert), sans attendre Discord.
+app.listen(PORT, "0.0.0.0", () => console.log(`API HTTP prête sur le port ${PORT}`));
+
+let started = false;
+async function onReady() {
+  if (started) return;
+  started = true;
   console.log(`Connecté en tant que ${client.user.tag}`);
   try {
     const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -597,7 +610,15 @@ client.once("clientReady", async () => {
   } catch (e) {
     console.error("Erreur enregistrement commandes:", e);
   }
-  app.listen(PORT, () => console.log(`API HTTP interne prête sur le port ${PORT}`));
-});
+}
+// "clientReady" (discord.js ≥ 14.22) ou "ready" (versions plus anciennes)
+client.once("clientReady", onReady);
+client.once("ready", onReady);
 
-client.login(TOKEN);
+client.on("error", (e) => console.error("Erreur client Discord:", e));
+process.on("unhandledRejection", (e) => console.error("unhandledRejection:", e));
+
+console.log("Connexion à Discord…");
+client.login(TOKEN).catch((e) => {
+  console.error("❌ Connexion Discord impossible :", e.message);
+});
