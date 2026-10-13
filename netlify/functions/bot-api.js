@@ -12,6 +12,17 @@ const NOTIFY_CHANNEL_ID = process.env.NOTIFY_CHANNEL_ID;
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID || null;
 const CADET_ROLE_ID = process.env.CADET_ROLE_ID || "1556333597131145367";
 
+// ---- Appel FIM (depuis le site) ----
+// Salon où les appels sont postés : APPEL_CHANNEL_ID, sinon NOTIFY_CHANNEL_ID.
+const APPEL_CHANNEL_ID = process.env.APPEL_CHANNEL_ID || process.env.NOTIFY_CHANNEL_ID;
+// Unités appelables. Pour en ajouter une : nouvelle ligne ici + la même clé dans APPEL_UNITS du site.
+const APPEL_UNITS = {
+  E11: { id: "1556333639183245372", label: "Opérateur E-11" },
+  NU7: { id: "1556333675153461248", label: "Opérateur Nu-7" },
+};
+const APPEL_COOLDOWN_MS = 30 * 1000; // anti-spam (au mieux, par instance de la fonction)
+const appelCooldown = new Map();
+
 const PERM_ADMIN = 0x8n;
 const PERM_MANAGE_GUILD = 0x20n;
 const PERM_MANAGE_ROLES = 0x10000000n;
@@ -195,6 +206,42 @@ async function actionNotify(me, body, rolesList) {
   });
 }
 
+async function actionAppel(me, body) {
+  const unit = APPEL_UNITS[String(body.unit || "")];
+  const reason = String(body.reason || "").trim().slice(0, 500);
+  if (!unit) return json(400, { error: "Unité inconnue." });
+  if (!reason) return json(400, { error: "La raison de l'appel est requise." });
+  if (!APPEL_CHANNEL_ID) return json(500, { error: "APPEL_CHANNEL_ID (ou NOTIFY_CHANNEL_ID) non configuré sur Netlify" });
+
+  const wait = APPEL_COOLDOWN_MS - (Date.now() - (appelCooldown.get(me.id) || 0));
+  if (wait > 0) return json(429, { error: `Patiente ${Math.ceil(wait / 1000)} s avant de lancer un nouvel appel.` });
+
+  const member = await discord("GET", `/guilds/${GUILD_ID}/members/${me.id}`);
+  if (!member.ok) return json(403, { error: "Ton compte Discord n'est pas membre du serveur." });
+
+  const name = me.global_name || me.username;
+  const posted = await discord("POST", `/channels/${APPEL_CHANNEL_ID}/messages`, {
+    body: {
+      content: `<@&${unit.id}>`,
+      embeds: [{
+        title: `📢 Appel FIM — ${unit.label}`,
+        description: `**Raison :** ${reason}`,
+        color: 0xe74c3c,
+        footer: { text: `Appel lancé depuis le site par ${name}` },
+        timestamp: new Date().toISOString(),
+      }],
+      // Seul le rôle appelé peut être mentionné (@everyone et autres mentions dans la raison sont ignorés).
+      allowed_mentions: { roles: [unit.id], parse: [] },
+    },
+  });
+  if (!posted.ok) {
+    return json(500, { error: `Impossible d'écrire dans le salon d'appel (HTTP ${posted.status}). Vérifie APPEL_CHANNEL_ID et les permissions du bot dans ce salon.` });
+  }
+  appelCooldown.set(me.id, Date.now());
+  await logEvent("📢 Appel FIM", `${unit.label} appelé par <@${me.id}> depuis le site. Raison : ${reason}`);
+  return json(200, { ok: true, unit: unit.label });
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") return json(405, { error: "POST requis" });
   if (!BOT_TOKEN) return json(500, { error: "DISCORD_TOKEN non configuré sur Netlify" });
@@ -213,6 +260,9 @@ exports.handler = async (event) => {
     if (!me.ok) {
       return json(401, { error: `Discord a refusé la session (HTTP ${me.status}). Déconnecte-toi puis reconnecte-toi sur le site.` });
     }
+    // L'appel FIM est ouvert à tout membre du serveur ; le reste est réservé au staff.
+    if (action === "appel") return await actionAppel(me.data, body);
+
     const staff = await checkStaff(me.data.id);
     if (!staff.allowed) return json(staff.status || 401, { error: staff.error });
 
