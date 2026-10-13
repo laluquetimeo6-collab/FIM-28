@@ -242,6 +242,10 @@
     view: "landing",
     loading: false,
     menuOpen: false,
+    appelUnit: "",
+    appelReason: "",
+    appelStatus: "",
+    appelSending: false,
     role: null,
     discordUser: null,
     discordAccessToken: null,
@@ -439,11 +443,16 @@
 
   /* ---------- Discord OAuth ---------- */
 
+  // Lien direct : https://…/?page=appel -> après la connexion Discord, on arrive sur la page Appel FIM.
+  let afterLogin = null;
+  function wantsAppelPage() { return new URLSearchParams(window.location.search).get("page") === "appel"; }
+
   function parseDiscordToken() {
     if (window.location.hash && window.location.hash.indexOf("access_token") !== -1) {
       const params = new URLSearchParams(window.location.hash.substring(1));
       const token = params.get("access_token");
       if (token) {
+        afterLogin = params.get("state");
         history.replaceState(null, "", window.location.pathname + window.location.search);
         return token;
       }
@@ -466,6 +475,7 @@
       response_type: "token",
       scope: "identify",
     });
+    if (wantsAppelPage()) params.set("state", "appel");
     window.location.href = "https://discord.com/api/oauth2/authorize?" + params.toString();
   }
 
@@ -481,6 +491,7 @@
     else if (state.view === "apply") body = renderApplyForm();
     else if (state.view === "staff") body = renderStaff();
     else if (state.view === "staffBoard") body = renderStaffBoard();
+    else if (state.view === "appel") body = renderAppel();
     else if (state.view === "gestion") body = renderGestion();
     else if (state.view === "gestionStaff") body = renderGestionStaff();
     else if (state.view === "editUnit") body = renderEditUnit();
@@ -522,6 +533,7 @@
           <div class="menu-dropdown">
             <button class="menuItem ${state.view === "candidat" ? "active" : ""}" data-view="candidat">Recrutement</button>
             <button class="menuItem ${(state.view === "codexList" || state.view === "codexView") ? "active" : ""}" data-view="codexList">Codex</button>
+            <button class="menuItem ${state.view === "appel" ? "active" : ""}" data-view="appel">Appel FIM</button>
             ${state.role ? `
               <div class="menu-divider"></div>
               <button class="menuItem ${state.view === "staff" ? "active" : ""}" data-view="staff">Registre (Staff)</button>
@@ -551,6 +563,7 @@
     return `
       <div class="landing">
         <p class="tagline">Plateforme de recrutement — accès réservé aux opérateurs accrédités.</p>
+        ${wantsAppelPage() ? `<p class="hint" style="margin:0 0 16px;">Connecte-toi avec Discord pour lancer un appel FIM.</p>` : ""}
         <button class="btn-discord" id="discordLoginBtn">
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M4 4h16v12H7l-3 3V4z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
           Se connecter via Discord
@@ -684,6 +697,71 @@
         </div>
       </article>
     `;
+  }
+
+  // Unités appelables (mêmes clés que APPEL_UNITS dans netlify/functions/bot-api.js)
+  const APPEL_UNITS = [
+    { key: "E11", label: "Opérateur E-11" },
+    { key: "NU7", label: "Opérateur Nu-7" },
+  ];
+
+  function renderAppel() {
+    return `
+      <h2 class="section-title">Appel FIM</h2>
+      <p class="hint" style="margin:0 0 18px;">Choisis l'unité à appeler et indique la raison. L'appel est envoyé dans le salon Discord dédié, avec mention de l'unité.</p>
+      <form id="appelForm" novalidate>
+        <div class="field">
+          <label for="appelUnit">Unité à appeler</label>
+          <select id="appelUnit" name="appelUnit">
+            <option value="">— Choisir une unité —</option>
+            ${APPEL_UNITS.map(u => `<option value="${esc(u.key)}" ${state.appelUnit === u.key ? "selected" : ""}>${esc(u.label)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field">
+          <label for="appelReason">Raison de l'appel</label>
+          <textarea id="appelReason" name="appelReason" maxlength="500">${esc(state.appelReason || "")}</textarea>
+        </div>
+        <button type="submit" class="btn-primary" ${state.appelSending ? "disabled" : ""}>${state.appelSending ? "Envoi…" : "📢 Lancer l'appel"}</button>
+        <p class="hint" style="margin-top:12px;">${esc(state.appelStatus || "")}</p>
+      </form>
+    `;
+  }
+
+  async function handleAppel(e) {
+    e.preventDefault();
+    if (state.appelSending) return;
+    const unit = state.appelUnit;
+    const reason = (state.appelReason || "").trim();
+    const fail = (msg) => { state.appelStatus = msg; render(); };
+    if (!unit) return fail("✗ Choisis une unité à appeler.");
+    if (!reason) return fail("✗ Indique la raison de l'appel.");
+    if (!state.discordAccessToken) return fail("✗ Session Discord expirée — reconnecte-toi.");
+    state.appelSending = true;
+    state.appelStatus = "";
+    render();
+    try {
+      const res = await fetch("/.netlify/functions/bot-api?action=appel", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + state.discordAccessToken
+        },
+        body: JSON.stringify({ unit, reason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      state.appelSending = false;
+      if (res.ok && data.ok) {
+        state.appelStatus = "✓ Appel envoyé : " + (data.unit || "unité") + " a été notifiée sur Discord.";
+        state.appelReason = "";
+        state.appelUnit = "";
+      } else {
+        state.appelStatus = "✗ Échec : " + (data.error || res.status);
+      }
+    } catch (err) {
+      state.appelSending = false;
+      state.appelStatus = "✗ Erreur réseau : " + err.message;
+    }
+    render();
   }
 
   function renderStaffBoard() {
@@ -933,6 +1011,13 @@
 
     const staffBoardForm = document.getElementById("staffBoardForm");
     if (staffBoardForm) staffBoardForm.addEventListener("submit", handleSaveStaffBoard);
+
+    const appelForm = document.getElementById("appelForm");
+    if (appelForm) {
+      appelForm.addEventListener("submit", handleAppel);
+      document.getElementById("appelUnit").addEventListener("change", ev => { state.appelUnit = ev.target.value; });
+      document.getElementById("appelReason").addEventListener("input", ev => { state.appelReason = ev.target.value; });
+    }
 
     const staffForm = document.getElementById("staffForm");
     if (staffForm) staffForm.addEventListener("submit", handleAddStaff);
@@ -1483,6 +1568,7 @@
       state.staffList = await loadStaff();
       state.role = getRole(state.discordUser.id);
       state.view = state.role ? "staff" : "candidat";
+      if (afterLogin === "appel") state.view = "appel";
       state.applications = await loadApplications();
       // Si cette personne avait déjà candidaté avec une ancienne version du site,
       // son ID Discord OAuth est automatiquement rattaché à ses candidatures.
