@@ -318,7 +318,7 @@ async function actionAppel(me, body) {
   const serverId = String(body.serverId || body.server_id || body.guildId || "").trim();
   if (!unit) return json(400, { error: "Unité inconnue." });
   if (!site) return json(400, { error: "Le site est requis (« Sur quel site ? »)." });
-  if (!/^\d{15,25}$/.test(serverId)) return json(400, { error: "ID du serveur invalide : il doit contenir 15 à 25 chiffres." });
+  if (!/^\d{1,25}$/.test(serverId)) return json(400, { error: "ID du serveur invalide : uniquement des chiffres (25 maximum)." });
   if (!reason) return json(400, { error: "La raison de l'appel est requise." });
   if (!APPEL_CHANNEL_ID) return json(500, { error: "APPEL_CHANNEL_ID (ou NOTIFY_CHANNEL_ID) non configuré sur Netlify" });
 
