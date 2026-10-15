@@ -751,7 +751,7 @@
     if (!unit) return fail("✗ Choisis une unité à appeler.");
     if (!site) return fail("✗ Indique sur quel site l'appel est demandé.");
     if (!serverId) return fail("✗ Indique l'ID du serveur.");
-    if (!/^\d{15,25}$/.test(serverId)) return fail("✗ L'ID du serveur doit contenir uniquement 15 à 25 chiffres.");
+    if (!/^\d{1,25}$/.test(serverId)) return fail("✗ L'ID du serveur doit contenir uniquement des chiffres.");
     if (!reason) return fail("✗ Indique la raison de l'appel.");
     if (!state.discordAccessToken) return fail("✗ Session Discord expirée — reconnecte-toi.");
     state.appelSending = true;
