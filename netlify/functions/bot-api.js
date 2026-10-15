@@ -2,7 +2,7 @@
 // Elle vérifie que la personne connectée est staff (Gérer le serveur / Administrateur),
 // puis attribue les rôles, envoie le message dans le salon et le MP, en utilisant le token du bot.
 // Variables à créer sur Netlify : DISCORD_TOKEN, GUILD_ID, NOTIFY_CHANNEL_ID
-// (optionnel : LOG_CHANNEL_ID, CADET_ROLE_ID)
+// (optionnel : LOG_CHANNEL_ID, CADET_ROLE_ID, APPEL_CHANNEL_ID, GAMMA5_ROLE_ID, MATRICULE_SCOPE = letter | global)
 
 const API = "https://discord.com/api/v10";
 const UA = "DiscordBot (https://intersite-fim.netlify.app, 1.0.0)";
@@ -19,7 +19,14 @@ const APPEL_CHANNEL_ID = process.env.APPEL_CHANNEL_ID || process.env.NOTIFY_CHAN
 const APPEL_UNITS = {
   E11: { id: "1556333639183245372", label: "Opérateur E-11" },
   NU7: { id: "1556333675153461248", label: "Opérateur Nu-7" },
+  GAMMA5: { id: process.env.GAMMA5_ROLE_ID || "1559689009301688420", label: "Unité Gamma-5" },
 };
+// Clés acceptées pour Gamma-5 (au cas où le site envoie « G5 », « Gamma-5 », etc.)
+const APPEL_UNIT_ALIASES = { G5: "GAMMA5", GAMMA: "GAMMA5" };
+function resolveUnit(raw) {
+  const key = String(raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return APPEL_UNITS[APPEL_UNIT_ALIASES[key] || key] || null;
+}
 const APPEL_COOLDOWN_MS = 30 * 1000; // anti-spam (au mieux, par instance de la fonction)
 const appelCooldown = new Map();
 
@@ -114,6 +121,81 @@ async function sendDM(userId, content) {
   return { ok: true };
 }
 
+// ---- Matricules FIM (ex. A-002, Δ-009) — voir « Matricules FIM V1 » ----
+// Un recruté (rôle Cadet) reçoit un matricule Alpha « A-NNN » : numéro à 3 chiffres, séquentiel.
+// Le pseudo Discord devient uniquement le matricule ; le prochain numéro = (plus grand déjà présent dans les pseudos) + 1.
+const MATRICULE_LETTER = "A"; // Alpha = Recrue / Cadet
+// "letter" (défaut) : une numérotation par lettre (A-001, B-001…). "global" : une seule suite pour toute la Force.
+const MATRICULE_SCOPE = (process.env.MATRICULE_SCOPE || "letter").toLowerCase();
+// Lettres reconnues : A, β/B, Γ, Δ, Σ, Ψ, Ω (variantes latines/grecques/cyrilliques acceptées)
+const MATRICULE_RE = /(?:^|[^\p{L}\p{N}])([AΑBΒβΓГΔΣΨΩ])-(\d{3})(?!\d)/u;
+
+function canonLetter(l) {
+  if (l === "Α") return "A";
+  if (l === "Β" || l === "β") return "B";
+  if (l === "Г") return "Γ";
+  return l;
+}
+function parseMatricule(text) {
+  const m = MATRICULE_RE.exec(String(text || ""));
+  return m ? { letter: canonLetter(m[1]), num: parseInt(m[2], 10) } : null;
+}
+function formatMatricule(letter, num) {
+  return `${letter}-${String(num).padStart(3, "0")}`;
+}
+function memberMatricule(m) {
+  const u = m.user || {};
+  return parseMatricule(m.nick) || parseMatricule(u.global_name) || parseMatricule(u.username);
+}
+function computeNextMatricule(members, letter) {
+  let max = 0;
+  for (const m of members) {
+    const p = memberMatricule(m);
+    if (!p) continue;
+    if (MATRICULE_SCOPE === "global" || p.letter === letter) max = Math.max(max, p.num);
+  }
+  if (max >= 999) throw new Error("Plus de matricule disponible (999 atteint).");
+  return formatMatricule(letter, max + 1);
+}
+
+async function fetchAllMembers() {
+  const all = [];
+  let after = "0";
+  for (let i = 0; i < 20; i++) {
+    const r = await discord("GET", `/guilds/${GUILD_ID}/members?limit=1000&after=${after}`);
+    if (!r.ok) {
+      throw new Error(`Impossible de lister les membres (HTTP ${r.status}). Active « Server Members Intent » pour le bot sur le portail développeur Discord.`);
+    }
+    all.push(...r.data);
+    if (r.data.length < 1000) break;
+    after = r.data[r.data.length - 1].user.id;
+  }
+  return all;
+}
+
+// Attribue un matricule Alpha au membre (s'il n'en a pas déjà un) et l'écrit dans son pseudo.
+async function giveMatricule(discordId, reason) {
+  const members = await fetchAllMembers();
+  const target = members.find(m => m.user && m.user.id === discordId);
+  if (!target) throw new Error("Ce candidat n'est pas sur le serveur Discord : matricule impossible.");
+
+  const existing = memberMatricule(target);
+  if (existing) {
+    return { matricule: formatMatricule(existing.letter, existing.num), created: false, nicknameSet: true, nicknameError: null };
+  }
+
+  const matricule = computeNextMatricule(members, MATRICULE_LETTER);
+  const nick = matricule; // le pseudo devient uniquement le matricule (ex. A-005)
+  const r = await discord("PATCH", `/guilds/${GUILD_ID}/members/${discordId}`, { body: { nick }, reason });
+  let nicknameError = null;
+  if (!r.ok) {
+    nicknameError = r.status === 403
+      ? "Le bot ne peut pas modifier ce pseudo (propriétaire du serveur, rôle plus haut que le bot, ou permission « Gérer les pseudos » manquante)."
+      : `Discord a refusé le changement de pseudo (HTTP ${r.status}).`;
+  }
+  return { matricule, created: true, nicknameSet: r.ok, nicknameError };
+}
+
 async function findMember(discordId, names) {
   if (discordId) {
     const m = await discord("GET", `/guilds/${GUILD_ID}/members/${discordId}`);
@@ -150,11 +232,21 @@ async function actionDM(me, body, rolesList) {
     await logEvent("🎖️ Rôles attribués", `${assigned.map(r => `<@&${r.id}>`).join(", ")} → <@${discordId}> (depuis le site, via MP, par <@${me.id}>).`);
   }
 
-  const dm = await sendDM(discordId, message);
-  if (!dm.ok) {
-    return json(500, { error: "Impossible d'envoyer le MP (DMs peut-être fermés).", assignedRoles: assigned.map(r => r.name) });
+  // Matricule FIM : seulement si le rôle Cadet est attribué. Non bloquant.
+  let mat = null, matriculeError = null;
+  if (roleIds.includes(CADET_ROLE_ID)) {
+    try {
+      mat = await giveMatricule(discordId, "Matricule FIM — recrutement (MP)");
+      if (mat.created) await logEvent("🪪 Matricule attribué", `**${mat.matricule}** → <@${discordId}> (par <@${me.id}>).${mat.nicknameError ? "\n⚠️ " + mat.nicknameError : ""}`);
+    } catch (e) { matriculeError = e.message; }
   }
-  return json(200, { ok: true, assignedRoles: assigned.map(r => r.name) });
+  const matText = mat ? `\n\n🪪 Ton matricule : **${mat.matricule}**` : "";
+
+  const dm = await sendDM(discordId, String(message).slice(0, 1900) + matText);
+  if (!dm.ok) {
+    return json(500, { error: "Impossible d'envoyer le MP (DMs peut-être fermés).", assignedRoles: assigned.map(r => r.name), matricule: mat && mat.matricule, matriculeError });
+  }
+  return json(200, { ok: true, assignedRoles: assigned.map(r => r.name), matricule: mat && mat.matricule, nicknameSet: mat ? mat.nicknameSet : null, matriculeError: matriculeError || (mat && mat.nicknameError) || null });
 }
 
 async function actionNotify(me, body, rolesList) {
@@ -181,9 +273,19 @@ async function actionNotify(me, body, rolesList) {
     await logEvent("🎖️ Rôles attribués", `${assigned.map(r => `<@&${r.id}>`).join(", ")} → <@${discordId}> (depuis le site, par <@${me.id}>).`);
   }
 
+  // Matricule FIM : seulement si le rôle Cadet est attribué. Non bloquant.
+  let mat = null, matriculeError = null;
+  if (roleIds.includes(CADET_ROLE_ID)) {
+    try {
+      mat = await giveMatricule(discordId, "Matricule FIM — recrutement (candidature)");
+      if (mat.created) await logEvent("🪪 Matricule attribué", `**${mat.matricule}** → <@${discordId}> (par <@${me.id}>).${mat.nicknameError ? "\n⚠️ " + mat.nicknameError : ""}`);
+    } catch (e) { matriculeError = e.message; }
+  }
+  const matText = mat ? `\n🪪 Matricule : **${mat.matricule}**` : "";
+
   const posted = await discord("POST", `/channels/${NOTIFY_CHANNEL_ID}/messages`, {
     body: {
-      content: `${String(message).slice(0, 1850)}\n\n<@${discordId}>`,
+      content: `${String(message).slice(0, 1800)}${matText}\n\n<@${discordId}>`,
       allowed_mentions: { users: [discordId], parse: [] },
     },
   });
@@ -191,7 +293,7 @@ async function actionNotify(me, body, rolesList) {
     return json(500, { error: `Impossible d'écrire dans le salon de notification (HTTP ${posted.status}). Vérifie NOTIFY_CHANNEL_ID et les permissions du bot dans ce salon.` });
   }
 
-  const rolesText = assigned.length ? `\n🎖️ Rôle(s) attribué(s) : **${assigned.map(r => r.name).join(", ")}**` : "";
+  const rolesText = (assigned.length ? `\n🎖️ Rôle(s) attribué(s) : **${assigned.map(r => r.name).join(", ")}**` : "") + matText;
   const dmMessage = status === "admis"
     ? `🎉 **Félicitations !**\n\nTa candidature **FIM Intersite** a été approuvée.${rolesText}\n\n${String(message).slice(0, 1200)}`
     : `${String(message).slice(0, 1700)}${rolesText}`;
@@ -203,13 +305,20 @@ async function actionNotify(me, body, rolesList) {
     assignedRoles: assigned.map(r => r.name),
     dmSent: dm.ok,
     dmError: dm.ok ? null : dm.error,
+    matricule: mat && mat.matricule,
+    nicknameSet: mat ? mat.nicknameSet : null,
+    matriculeError: matriculeError || (mat && mat.nicknameError) || null,
   });
 }
 
 async function actionAppel(me, body) {
-  const unit = APPEL_UNITS[String(body.unit || "")];
+  const unit = resolveUnit(body.unit);
   const reason = String(body.reason || "").trim().slice(0, 500);
+  const site = String(body.site || "").trim().slice(0, 200);
+  const serverId = String(body.serverId || body.server_id || body.guildId || "").trim();
   if (!unit) return json(400, { error: "Unité inconnue." });
+  if (!site) return json(400, { error: "Le site est requis (« Sur quel site ? »)." });
+  if (!/^\d{15,25}$/.test(serverId)) return json(400, { error: "ID du serveur invalide : il doit contenir 15 à 25 chiffres." });
   if (!reason) return json(400, { error: "La raison de l'appel est requise." });
   if (!APPEL_CHANNEL_ID) return json(500, { error: "APPEL_CHANNEL_ID (ou NOTIFY_CHANNEL_ID) non configuré sur Netlify" });
 
@@ -225,7 +334,7 @@ async function actionAppel(me, body) {
       content: `<@&${unit.id}>`,
       embeds: [{
         title: `📢 Appel FIM — ${unit.label}`,
-        description: `**Raison :** ${reason}`,
+        description: `**Site :** ${site}\n**ID du serveur :** \`${serverId}\`\n**Raison :** ${reason}`,
         color: 0xe74c3c,
         footer: { text: `Appel lancé depuis le site par ${name}` },
         timestamp: new Date().toISOString(),
@@ -238,7 +347,7 @@ async function actionAppel(me, body) {
     return json(500, { error: `Impossible d'écrire dans le salon d'appel (HTTP ${posted.status}). Vérifie APPEL_CHANNEL_ID et les permissions du bot dans ce salon.` });
   }
   appelCooldown.set(me.id, Date.now());
-  await logEvent("📢 Appel FIM", `${unit.label} appelé par <@${me.id}> depuis le site. Raison : ${reason}`);
+  await logEvent("📢 Appel FIM", `${unit.label} appelé par <@${me.id}> depuis le site. Site : ${site} — Serveur : ${serverId} — Raison : ${reason}`);
   return json(200, { ok: true, unit: unit.label });
 }
 
