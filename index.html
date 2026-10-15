@@ -181,9 +181,11 @@
   const RECRUITER_DISCORD_IDS = ["1473969413886709770", "1097850827063959552", "881158089699655690"];
 
   function getRole(discordId) {
+    // Le rôle le plus élevé gagne, quelle que soit la source (code ou « Gestion du staff »).
     if (ADMIN_DISCORD_IDS.indexOf(discordId) !== -1) return "admin";
-    if (RECRUITER_DISCORD_IDS.indexOf(discordId) !== -1) return "recruteur";
     const entry = state.staffList.find(s => s.discordId === discordId);
+    if (entry && entry.role === "admin") return "admin";
+    if (RECRUITER_DISCORD_IDS.indexOf(discordId) !== -1) return "recruteur";
     return entry ? entry.role : null;
   }
 
@@ -243,6 +245,8 @@
     loading: false,
     menuOpen: false,
     appelUnit: "",
+    appelSite: "",
+    appelServerId: "",
     appelReason: "",
     appelStatus: "",
     appelSending: false,
@@ -512,7 +516,7 @@
         </header>
         ${state.discordUser ? `
           <div class="identity-row">
-            <span class="who">Connecté en tant que <strong>${esc(state.discordUser.display)}</strong>${state.role === "admin" ? " · admin" : state.role === "recruteur" ? " · recruteur" : ""}</span>
+            <span class="who">Connecté en tant que <strong>${esc(state.discordUser.display)}</strong>${state.role === "admin" ? " · admin" : state.role === "recruteur" ? " · recruteur" : ""} <small style="opacity:.6">(ID Discord : ${esc(state.discordUser.id)})</small></span>
             <button class="btn-link" id="logoutBtn">Se déconnecter</button>
           </div>
         ` : ""}
@@ -703,6 +707,7 @@
   const APPEL_UNITS = [
     { key: "E11", label: "Opérateur E-11" },
     { key: "NU7", label: "Opérateur Nu-7" },
+    { key: "GAMMA5", label: "Unité Gamma-5" },
   ];
 
   function renderAppel() {
@@ -718,6 +723,14 @@
           </select>
         </div>
         <div class="field">
+          <label for="appelSite">Sur quel site ?</label>
+          <input id="appelSite" name="appelSite" type="text" maxlength="200" value="${esc(state.appelSite || "")}" placeholder="Ex. Site-19">
+        </div>
+        <div class="field">
+          <label for="appelServerId">ID du serveur</label>
+          <input id="appelServerId" name="appelServerId" type="text" inputmode="numeric" maxlength="25" value="${esc(state.appelServerId || "")}" placeholder="Ex. 123456789012345678">
+        </div>
+        <div class="field">
           <label for="appelReason">Raison de l'appel</label>
           <textarea id="appelReason" name="appelReason" maxlength="500">${esc(state.appelReason || "")}</textarea>
         </div>
@@ -731,9 +744,14 @@
     e.preventDefault();
     if (state.appelSending) return;
     const unit = state.appelUnit;
+    const site = (state.appelSite || "").trim();
+    const serverId = (state.appelServerId || "").trim();
     const reason = (state.appelReason || "").trim();
     const fail = (msg) => { state.appelStatus = msg; render(); };
     if (!unit) return fail("✗ Choisis une unité à appeler.");
+    if (!site) return fail("✗ Indique sur quel site l'appel est demandé.");
+    if (!serverId) return fail("✗ Indique l'ID du serveur.");
+    if (!/^\d{15,25}$/.test(serverId)) return fail("✗ L'ID du serveur doit contenir uniquement 15 à 25 chiffres.");
     if (!reason) return fail("✗ Indique la raison de l'appel.");
     if (!state.discordAccessToken) return fail("✗ Session Discord expirée — reconnecte-toi.");
     state.appelSending = true;
@@ -746,13 +764,15 @@
           "Content-Type": "application/json",
           "Authorization": "Bearer " + state.discordAccessToken
         },
-        body: JSON.stringify({ unit, reason }),
+        body: JSON.stringify({ unit, site, serverId, reason }),
       });
       const data = await res.json().catch(() => ({}));
       state.appelSending = false;
       if (res.ok && data.ok) {
         state.appelStatus = "✓ Appel envoyé : " + (data.unit || "unité") + " a été notifiée sur Discord.";
         state.appelReason = "";
+        state.appelSite = "";
+        state.appelServerId = "";
         state.appelUnit = "";
       } else {
         state.appelStatus = "✗ Échec : " + (data.error || res.status);
@@ -1016,6 +1036,8 @@
     if (appelForm) {
       appelForm.addEventListener("submit", handleAppel);
       document.getElementById("appelUnit").addEventListener("change", ev => { state.appelUnit = ev.target.value; });
+      document.getElementById("appelSite").addEventListener("input", ev => { state.appelSite = ev.target.value; });
+      document.getElementById("appelServerId").addEventListener("input", ev => { state.appelServerId = ev.target.value; });
       document.getElementById("appelReason").addEventListener("input", ev => { state.appelReason = ev.target.value; });
     }
 
